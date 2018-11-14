@@ -4432,7 +4432,7 @@ struct action_rss_data {
     uint16_t queue[0];
 };
 
-static struct rte_flow_action_rss *
+static struct action_rss_data *
 add_flow_rss_action(struct flow_actions *actions,
                     struct netdev *netdev) {
     int i;
@@ -4459,7 +4459,7 @@ add_flow_rss_action(struct flow_actions *actions,
 
     add_flow_action(actions, RTE_FLOW_ACTION_TYPE_RSS, &rss_data->conf);
 
-    return &rss_data->conf;
+    return rss_data;
 }
 
 static int
@@ -4669,7 +4669,7 @@ end_proto_check:
     add_flow_pattern(&patterns, RTE_FLOW_ITEM_TYPE_END, NULL, NULL);
 
     struct rte_flow_action_mark mark;
-    struct rte_flow_action_rss *rss;
+    struct action_rss_data *rss;
 
     mark.id = info->flow_mark;
     add_flow_action(&actions, RTE_FLOW_ACTION_TYPE_MARK, &mark);
@@ -4684,14 +4684,7 @@ end_proto_check:
 
     ovs_mutex_unlock(&dev->mutex);
 
-    /*
-     * 'rss' points to a memory (struct rte_flow_action_rss) that is contained
-     * in a bigger memory (struct action_rss_data) that was allocated in
-     * function add_flow_rss_actions(). The bigger memory holds additional
-     * space for the RSS queues. Given the 'rss' pointer we are freeing the
-     * bigger memory by using the CONTAINER_OF() macro.
-     */
-    free(CONTAINER_OF(rss, struct action_rss_data, conf));
+    free(rss);
     if (!flow) {
         VLOG_ERR("%s: rte flow creat error: %u : message : %s\n",
                  netdev_get_name(netdev), error.type, error.message);
