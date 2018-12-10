@@ -519,8 +519,8 @@ is_dpdk_class(const struct netdev_class *class)
 static uint32_t
 dpdk_buf_size(int mtu)
 {
-    return ROUND_UP((MTU_TO_MAX_FRAME_LEN(mtu) + RTE_PKTMBUF_HEADROOM),
-                     NETDEV_DPDK_MBUF_ALIGN);
+    return ROUND_UP(MTU_TO_MAX_FRAME_LEN(mtu), NETDEV_DPDK_MBUF_ALIGN)
+            + RTE_PKTMBUF_HEADROOM;
 }
 
 /* Allocates an area of 'sz' bytes from DPDK.  The memory is zero'ed.
@@ -679,6 +679,8 @@ dpdk_mp_create(struct netdev_dpdk *dev, int mtu, bool per_port_mp)
                   dev->requested_n_rxq, dev->requested_n_txq,
                   RTE_CACHE_LINE_SIZE);
 
+        /* The size of the mbuf's private area (i.e. area that holds OvS'
+         * dp_packet data)*/
         mbuf_priv_data_len = sizeof(struct dp_packet) -
                                  sizeof(struct rte_mbuf);
         /* The size of the entire dp_packet. */
@@ -929,8 +931,9 @@ dpdk_eth_dev_port_config(struct netdev_dpdk *dev, int n_rxq, int n_txq)
         conf.rxmode.offloads |= DEV_RX_OFFLOAD_CHECKSUM;
     }
 
-    if (dev->hw_ol_features & NETDEV_RX_HW_CRC_STRIP) {
-        conf.rxmode.offloads |= DEV_RX_OFFLOAD_CRC_STRIP;
+    if (!(dev->hw_ol_features & NETDEV_RX_HW_CRC_STRIP)
+        && info.rx_offload_capa & DEV_RX_OFFLOAD_KEEP_CRC) {
+        conf.rxmode.offloads |= DEV_RX_OFFLOAD_KEEP_CRC;
     }
 
     /* Limit configured rss hash functions to only those supported
@@ -1350,7 +1353,7 @@ static void
 netdev_dpdk_destruct(struct netdev *netdev)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
-    char devname[RTE_ETH_NAME_MAX_LEN];
+    struct rte_eth_dev_info dev_info;
 
     ovs_mutex_lock(&dpdk_mutex);
 
@@ -1359,10 +1362,11 @@ netdev_dpdk_destruct(struct netdev *netdev)
 
     if (dev->attached) {
         rte_eth_dev_close(dev->port_id);
-        if (rte_eth_dev_detach(dev->port_id, devname) < 0) {
-            VLOG_ERR("Device '%s' can not be detached", dev->devargs);
+        rte_eth_dev_info_get(dev->port_id, &dev_info);
+        if (dev_info.device && !rte_dev_remove(dev_info.device)) {
+            VLOG_INFO("Device '%s' has been detached", dev->devargs);
         } else {
-            VLOG_INFO("Device '%s' has been detached", devname);
+            VLOG_ERR("Device '%s' can not be detached", dev->devargs);
         }
     }
 
@@ -1652,7 +1656,8 @@ netdev_dpdk_process_devargs(struct netdev_dpdk *dev,
         if (rte_eth_dev_get_port_by_name(name, &new_port_id)
                 || !rte_eth_dev_is_valid_port(new_port_id)) {
             /* Device not found in DPDK, attempt to attach it */
-            if (!rte_eth_dev_attach(devargs, &new_port_id)) {
+            if (!rte_dev_probe(devargs)
+                && !rte_eth_dev_get_port_by_name(name, &new_port_id)) {
                 /* Attach successful */
                 dev->attached = true;
                 VLOG_INFO("Device '%s' attached to DPDK", devargs);
@@ -3228,11 +3233,10 @@ static void
 netdev_dpdk_detach(struct unixctl_conn *conn, int argc OVS_UNUSED,
                    const char *argv[], void *aux OVS_UNUSED)
 {
-    int ret;
     char *response;
     dpdk_port_t port_id;
-    char devname[RTE_ETH_NAME_MAX_LEN];
     struct netdev_dpdk *dev;
+    struct rte_eth_dev_info dev_info;
 
     ovs_mutex_lock(&dpdk_mutex);
 
@@ -3251,8 +3255,8 @@ netdev_dpdk_detach(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
     rte_eth_dev_close(port_id);
 
-    ret = rte_eth_dev_detach(port_id, devname);
-    if (ret < 0) {
+    rte_eth_dev_info_get(port_id, &dev_info);
+    if (!dev_info.device || rte_dev_remove(dev_info.device)) {
         response = xasprintf("Device '%s' can not be detached", argv[1]);
         goto error;
     }
