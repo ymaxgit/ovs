@@ -1990,7 +1990,7 @@ netdev_dpdk_policer_run(struct rte_meter_srtcm *meter,
         pkt = pkts[i];
         /* Handle current packet */
         if (netdev_dpdk_policer_pkt_handle(meter, profile,
-                pkt, current_time)) {
+                                           pkt, current_time)) {
             if (cnt != i) {
                 pkts[cnt] = pkt;
             }
